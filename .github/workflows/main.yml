@@ -1,32 +1,128 @@
-name: 定时任务测试
+name: 每日节假日倒计时
 
-# 触发条件
 on:
-  # 定时执行 - 每天北京时间9点 (UTC+8，所以写UTC 1点)
+  # 每天北京时间 8:00 (UTC 0:00)
   schedule:
-    - cron: '0 1 * * *'
-  # 手动触发 - 用于测试
+    - cron: '0 0 * * *'
+  # 允许手动触发测试
   workflow_dispatch:
 
 jobs:
-  test-job:
+  daily-notification:
     runs-on: ubuntu-latest
     
     steps:
-      # 测试步骤
-      - name: 打印测试信息
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖
+        run: pip install requests pytz
+
+      - name: 计算倒计时并发送通知
+        env:
+          WECHAT_KEY: ${{ secrets.WECHAT_KEY }}
         run: |
-          echo "Hello! 定时任务执行成功！"
-          echo "当前时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
-      
-      # 发送企业微信通知
-      - name: 发送企业微信通知
-        run: |
-          curl -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${{ secrets.WECHAT_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{
+          # 创建 Python 脚本
+          cat <<EOF > holiday_bot.py
+          import datetime
+          import pytz
+          import requests
+          import os
+          import json
+
+          # 1. 获取北京时间
+          tz = pytz.timezone('Asia/Shanghai')
+          now = datetime.datetime.now(tz)
+          today = now.date()
+
+          # 2. 星期转换
+          week_map = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+          weekday = week_map[today.weekday()]
+
+          # -------------------------------------------------------
+          # 3. 节假日列表 (请根据年份手动更新这里的日期)
+          # 格式: ("节日名称", "YYYY-MM-DD")
+          # -------------------------------------------------------
+          holidays = [
+              ("元旦", "2025-01-01"),
+              ("春节", "2025-01-29"), # 2025年春节
+              ("清明节", "2025-04-04"),
+              ("劳动节", "2025-05-01"),
+              ("端午节", "2025-05-31"),
+              ("中秋节", "2025-10-06"),
+              ("国庆节", "2025-10-01"),
+              ("2026元旦", "2026-01-01"),
+              ("2026春节", "2026-02-17") 
+          ]
+          
+          # -------------------------------------------------------
+
+          # 寻找最近的一个节日
+          next_holiday_name = ""
+          next_holiday_days = 999
+          
+          # 专门寻找春节
+          cny_days = -1
+          
+          for name, date_str in holidays:
+              h_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+              diff = (h_date - today).days
+              
+              # 只有未来的节日才计算
+              if diff >= 0:
+                  # 找最近的节日
+                  if diff < next_holiday_days:
+                      next_holiday_days = diff
+                      next_holiday_name = name
+                  
+                  # 如果是当前年份最近的一个春节 (逻辑简单判断包含"春节"字样)
+                  if "春节" in name and cny_days == -1:
+                      cny_days = diff
+
+          # 4. 构建消息内容
+          content = f"🌞 早安！打工人！\n"
+          content += f"📅 今天是：{today} {weekday}\n"
+          content += f"------------------------\n"
+          
+          # 最近的节日
+          if next_holiday_name:
+              if next_holiday_days == 0:
+                  content += f"🎉 今天就是【{next_holiday_name}】！节日快乐！\n"
+              else:
+                  content += f"⏳ 距离【{next_holiday_name}】还有 {next_holiday_days} 天\n"
+          
+          # 特别强调春节 (如果最近的节日不是春节，则额外显示春节)
+          if cny_days != -1 and "春节" not in next_holiday_name:
+             content += f"🧨 距离【春节】还有 {cny_days} 天\n"
+          
+          content += f"------------------------\n"
+          content += f"💪 既然上了贼船，就做一个快乐的海盗！"
+
+          print("发送的消息内容:\n" + content)
+
+          # 5. 发送企业微信
+          webhook_key = os.environ.get("WECHAT_KEY")
+          if not webhook_key:
+              print("错误: 未找到 WECHAT_KEY secret")
+              exit(1)
+              
+          url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
+          headers = {"Content-Type": "application/json"}
+          data = {
               "msgtype": "text",
               "text": {
-                "content": "✅ GitHub Actions 测试成功！\n时间: '"$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"'"
+                  "content": content
               }
-            }'
+          }
+          
+          response = requests.post(url, headers=headers, json=data)
+          print("响应状态:", response.text)
+          EOF
+
+          # 运行脚本
+          python holiday_bot.py
