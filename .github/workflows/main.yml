@@ -1,4 +1,4 @@
-name: 每日节假日倒计时
+name: 每日节假日倒计时与新闻
 
 on:
   # 每天北京时间 8:00 (UTC 0:00)
@@ -21,9 +21,10 @@ jobs:
           python-version: '3.9'
 
       - name: 安装依赖
-        run: pip install requests pytz
+        # 增加 feedparser 用于解析 RSS
+        run: pip install requests pytz feedparser
 
-      - name: 计算倒计时并发送通知
+      - name: 计算倒计时、获取新闻并发送通知
         env:
           WECHAT_KEY: ${{ secrets.WECHAT_KEY }}
         run: |
@@ -34,6 +35,7 @@ jobs:
           import requests
           import os
           import json
+          import feedparser # 导入 feedparser
 
           # 1. 获取北京时间
           tz = pytz.timezone('Asia/Shanghai')
@@ -81,10 +83,35 @@ jobs:
                       next_holiday_name = name
                   
                   # 如果是当前年份最近的一个春节 (逻辑简单判断包含"春节"字样)
-                  if "春节" in name and cny_days == -1:
+                  if "春节" in name and (cny_days == -1 or h_date < datetime.datetime.strptime(holidays[holidays.index((name, date_str))-1][1], "%Y-%m-%d").date().replace(year=h_date.year) if "春节" in holidays[holidays.index((name, date_str))-1][0] else False):
                       cny_days = diff
+                      
+          # 4. 获取每日新闻 (通过 RSS Feed)
+          news_headlines = []
+          try:
+              # 人民网要闻快讯 RSS Feed
+              rss_url = "http://www.people.com.cn/rss/ywkx.xml" 
+              feed = feedparser.parse(rss_url)
+              
+              if feed.entries:
+                  for i, entry in enumerate(feed.entries[:10]): # 获取前10条新闻
+                      news_headlines.append(f"{i+1}. {entry.title}")
+              else:
+                  news_headlines.append("未能获取到热门新闻。")
+          except Exception as e:
+              news_headlines.append(f"获取新闻时发生错误: {e}")
+          
+          # 如果想使用新闻 API (例如聚合数据、今日头条等)，需要替换上述 RSS 部分，并通常需要 API Key
+          # 例如 (伪代码):
+          # news_api_key = "YOUR_NEWS_API_KEY" # 需要在 GitHub Secrets 中设置
+          # news_api_url = f"https://api.some-news-service.com/top-headlines?apiKey={news_api_key}&country=cn"
+          # response = requests.get(news_api_url)
+          # data = response.json()
+          # for article in data.get("articles", [])[:10]:
+          #     news_headlines.append(f"- {article['title']}")
 
-          # 4. 构建消息内容
+
+          # 5. 构建消息内容
           content = f"🌞 早安！打工人！\n"
           content += f"📅 今天是：{today} {weekday}\n"
           content += f"------------------------\n"
@@ -97,15 +124,22 @@ jobs:
                   content += f"⏳ 距离【{next_holiday_name}】还有 {next_holiday_days} 天\n"
           
           # 特别强调春节 (如果最近的节日不是春节，则额外显示春节)
-          if cny_days != -1 and "春节" not in next_holiday_name:
+          if cny_days != -1 and ("春节" not in next_holiday_name or next_holiday_days > 0): # 避免重复显示今天的春节
              content += f"🧨 距离【春节】还有 {cny_days} 天\n"
           
           content += f"------------------------\n"
+          content += f"📰 今日热门新闻：\n"
+          if news_headlines:
+              content += "\n".join(news_headlines)
+          else:
+              content += "暂无新闻更新。"
+          
+          content += f"\n------------------------\n"
           content += f"💪 既然上了贼船，就做一个快乐的海盗！"
 
           print("发送的消息内容:\n" + content)
 
-          # 5. 发送企业微信
+          # 6. 发送企业微信
           webhook_key = os.environ.get("WECHAT_KEY")
           if not webhook_key:
               print("错误: 未找到 WECHAT_KEY secret")
